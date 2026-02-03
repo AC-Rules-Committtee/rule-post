@@ -6,12 +6,14 @@ import 'package:rule_post/content/widgets/list_tile.dart';
 import 'package:rule_post/content/widgets/parse_hex_colour.dart';
 import 'package:rule_post/content/widgets/section_card.dart';
 import 'package:rule_post/core/buttons/new_post_button.dart' show NewPostButton;
+import 'package:rule_post/core/buttons/edit_post_button.dart' show EditPostButton;
 import 'package:rule_post/core/models/post_types.dart';
 import 'package:rule_post/core/models/types.dart' show DocView;
 import 'package:rule_post/navigation/nav.dart';
 import 'package:rule_post/riverpod/post_streams.dart';
 import 'package:rule_post/core/widgets/unread_dot.dart';
 import 'package:rule_post/riverpod/user_detail.dart';
+import 'package:rule_post/riverpod/draft_provider.dart';
 import 'package:rule_post/debug/debug.dart';
 
 
@@ -38,14 +40,34 @@ class ChildrenSection extends ConsumerWidget {
         child: Consumer(
           builder: (context, ref, _) {
             final isLoggedIn = ref.watch(isLoggedInProvider);
-            return isLoggedIn
-              ? NewPostButton(
+            if (!isLoggedIn) return const SizedBox.shrink(); // empty widget when logged out
+
+            if (lockedResponses) {
+              return NewPostButton(
+                type: PostType.response,
+                parentIds: [enquiryId],
+                isLocked: true,
+                lockedReason: lockedReason,
+              );
+            }
+
+            // If button is unlocked, check for existing response drafts and lock new post button if found
+            final teamId = ref.watch(teamProvider);
+            final hasDraft = teamId == null
+              ? false
+              : ref
+                .watch(hasResponseDraftProvider((enquiryId: enquiryId, teamId: teamId)))
+                .valueOrNull;
+            final isLockedNow = hasDraft == true;
+            final reasonNow = isLockedNow
+                ? 'Your team already has a response draft for this enquiry.'
+                : '';
+            return NewPostButton(
               type: PostType.response,
               parentIds: [enquiryId],
-              isLocked: lockedResponses,
-              lockedReason: lockedReason,
-            )
-            : const SizedBox.shrink(); // empty widget when logged out
+              isLocked: isLockedNow,
+              lockedReason: reasonNow,
+            );
           },
         ),
       ),
@@ -145,12 +167,15 @@ class ChildrenSection extends ConsumerWidget {
               final d = docs[i].data();
               final id = docs[i].id;
               final segments = docs[i].reference.path.split('/');
+              final enquiryId = segments.length > 1 ? segments[1] : '';
+              final responseId = segments.length > 3 ? segments[3] : '';
               final title = (d['title'] ?? '').toString().trim();
               final text = (d['postText'] ?? '').toString().trim();
               final roundNumber = (d['roundNumber'] ?? 'x').toString().trim();
               final responseNumber = (d['responseNumber'] ?? 'x').toString().trim();
               final fromRC = d['fromRC'] ?? false;
               final isPublished = d['isPublished'] ?? false;
+              final publishedAt = d['publishedAt'];
               final teamColourHex = d['colour'];
               final Color teamColourFaded = teamColourHex == null
                   ? Colors.transparent
@@ -158,8 +183,6 @@ class ChildrenSection extends ConsumerWidget {
 
               Widget? tile;
               if (segments.contains('responses') && !segments.contains('comments')) {
-                final enquiryId = segments[1];
-                final responseId = id;
                 final titleSnippet = title.isEmpty
                     ? null
                     : (title.length > 140 ? '${title.substring(0, 140)}…' : title);
@@ -189,6 +212,15 @@ class ChildrenSection extends ConsumerWidget {
                 tile = ListTileCollapsibleText(
                   isPublished ? text : '(Draft) $text',
                   maxLines: 3,
+                  sideWidget: isPublished 
+                    ? publishedAtSideWidget(publishedAt) 
+                    : EditPostButton( // allow comment editing
+                        type: PostType.comment,
+                        postId: id,
+                        initialText: text,
+                        parentIds: [enquiryId, responseId],
+                        isPublished: isPublished,
+                      ),
                   // sideWidget: UnreadDot(id), // not working because data is deleted before it loads
                 );
               }
